@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize Session State for Input Management
+# Initialize Session State
 if 'input_value' not in st.session_state:
     st.session_state['input_value'] = ""
 if 'history' not in st.session_state:
@@ -76,13 +76,13 @@ st.markdown("""
 # 2. PHYSICS CONSTANTS DATA (CODATA 2022)
 # -----------------------------------------------------------------------------
 CONSTANTS = {
-    # [cite_start]Universal [cite: 2]
+    # Universal
     'c': 299792458, 'G': 6.67430e-11, 'h': 6.62607015e-34, 'hbar': 1.054571817e-34,
-    # [cite_start]Electromagnetic [cite: 2]
+    # Electromagnetic
     'e': 1.602176634e-19, 'mu0': 1.25663706127e-6, 'eps0': 8.8541878188e-12,
-    # [cite_start]Atomic [cite: 5, 8, 11]
+    # Atomic
     'me': 9.1093837139e-31, 'mp': 1.67262192595e-27, 'mn': 1.67492750056e-27,
-    # [cite_start]Physicochemical [cite: 17]
+    # Physicochemical
     'NA': 6.02214076e23, 'k': 1.380649e-23, 'R': 8.314462618, 'sigma': 5.670374419e-8
 }
 # Aliases
@@ -101,7 +101,7 @@ def safe_parse_expression(expr_str):
     """Sanitizes, handles equations, and parses into SymPy."""
     if not expr_str: return "Empty Input"
     
-    # FIX 1: Handle Equations (LHS = RHS -> LHS - RHS)
+    # Handle Equations (LHS = RHS -> LHS - RHS)
     if "=" in expr_str:
         parts = expr_str.split("=")
         if len(parts) == 2:
@@ -135,7 +135,7 @@ def plot_expression(expr_obj):
         f = sympy.lambdify(var, expr_obj, modules=['numpy'])
         x_vals = np.linspace(-10, 10, 1000)
         
-        # FIX 4: Handle Domain Errors (1/0, sqrt(-1))
+        # Handle Domain Errors (1/0, sqrt(-1))
         with np.errstate(divide='ignore', invalid='ignore'):
             y_vals = f(x_vals)
         
@@ -184,7 +184,16 @@ def query_groq_ai(api_key, expression, result):
 # Sidebar
 with st.sidebar:
     st.title("⚙️ Control Panel")
-    groq_api_key = st.text_input("Groq API Key", type="password")
+    
+    # -------------------------------------------------
+    # OPTION B: SECRETS MANAGEMENT IMPLEMENTATION
+    # -------------------------------------------------
+    if "GROQ_API_KEY" in st.secrets:
+        groq_api_key = st.secrets["GROQ_API_KEY"]
+        st.success("✅ AI Key Auto-Loaded")
+    else:
+        groq_api_key = st.text_input("Groq API Key", type="password", help="Enter key here or add to Streamlit Secrets")
+
     with st.expander("📚 Constants (Quick Ref)"):
         st.write(CONSTANTS)
     
@@ -195,7 +204,7 @@ with st.sidebar:
 # Main Area
 st.title("⚛️ Scientific Super Calculator")
 
-# FIX 2: Functional Quick Buttons
+# Functional Quick Buttons
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.button("c", on_click=insert_symbol, args=("c",))
 col2.button("G", on_click=insert_symbol, args=("G",))
@@ -209,7 +218,7 @@ user_input = st.text_input("Expression / Equation:", key="input_value", placehol
 # Action Buttons
 b1, b2, b3 = st.columns([1, 1, 2])
 calc_clicked = b1.button("🚀 Calculate")
-# FIX 3: Disable AI button if no result
+# Disable AI button if no result or key
 explain_clicked = b3.button("🤖 Explain with AI", disabled=st.session_state['last_result'] is None)
 
 # Execution Logic
@@ -235,7 +244,7 @@ if st.session_state['last_result']:
     
     obj = st.session_state['last_expr_obj']
     
-    # FIX 5: Symbolic Substitution & Numeric Evaluation
+    # Symbolic Substitution & Numeric Evaluation
     if hasattr(obj, 'free_symbols') and len(obj.free_symbols) > 0:
         st.latex(sympy.latex(obj))
         
@@ -264,9 +273,12 @@ if st.session_state['last_result']:
 
 # AI Logic
 if explain_clicked and st.session_state['last_result']:
-    with st.spinner("Analyzing..."):
-        expl = query_groq_ai(groq_api_key, st.session_state.input_value, st.session_state['last_result'])
-        st.markdown(f'<div class="ai-box"><h3>🤖 Analysis</h3>{expl}</div>', unsafe_allow_html=True)
+    if not groq_api_key:
+        st.error("⚠️ AI Key missing. Please add it to Streamlit Secrets or Enter in Sidebar.")
+    else:
+        with st.spinner("Analyzing..."):
+            expl = query_groq_ai(groq_api_key, st.session_state.input_value, st.session_state['last_result'])
+            st.markdown(f'<div class="ai-box"><h3>🤖 Analysis</h3>{expl}</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("v1.0.1 | Engineered with SymPy, Plotly, & Streamlit")
+st.caption("v1.0.2 | Engineered with SymPy, Plotly, & Streamlit")
