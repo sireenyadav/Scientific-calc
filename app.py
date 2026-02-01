@@ -1,172 +1,179 @@
 import streamlit as st
 import sympy
 import sympy.physics.units as u
-from sympy.physics.units import convert_to
 import numpy as np
 import plotly.graph_objects as go
 import requests
 import re
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURATION & CSS (Modern "Dark/Neon" UI)
+# 1. CONFIGURATION & STATE
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Scientific Super Calculator Pro",
-    page_icon="⚛️",
+    page_title="Scientific Super Calculator v3.0",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Initialize Session State
-state_keys = ['input_value', 'history', 'last_result', 'last_expr_obj', 'last_unit_check']
-for key in state_keys:
-    if key not in st.session_state:
-        st.session_state[key] = [] if key == 'history' else "" if key == 'input_value' else None
+state_defaults = {
+    'input_value': "",
+    'history': [],
+    'last_result_obj': None,
+    'last_numeric': None,
+    'ans': 0
+}
+for k, v in state_defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# Custom CSS for that "Engineer Grade" look
+# -----------------------------------------------------------------------------
+# 2. CUSTOM CSS (Cyberpunk/Pro Look)
+# -----------------------------------------------------------------------------
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a; color: #e2e8f0; }
     
-    /* Input Styling */
+    /* Inputs */
     .stTextInput > div > div > input {
         background-color: #1e293b; color: #38bdf8;
-        border: 1px solid #475569; border-radius: 8px;
-        font-family: 'Fira Code', 'Courier New', monospace; font-size: 18px;
+        border: 1px solid #475569; font-family: 'Fira Code', monospace;
     }
     
-    /* Virtual Keyboard Buttons */
-    .kbd-btn {
-        padding: 5px; margin: 2px; font-size: 14px;
-        background-color: #334155; color: white; border-radius: 5px;
-        border: 1px solid #475569; width: 100%; cursor: pointer;
+    /* Buttons */
+    .stButton > button {
+        background: #334155; border: 1px solid #475569; color: white;
+        border-radius: 6px; font-size: 14px;
+    }
+    .stButton > button:hover {
+        border-color: #38bdf8; color: #38bdf8;
     }
     
-    /* Result Cards */
-    .result-card {
-        background: rgba(30, 41, 59, 0.7); border-left: 5px solid #00f2ff;
-        padding: 15px; margin-top: 10px; border-radius: 5px;
+    /* Result Card */
+    .result-box {
+        background: rgba(30, 41, 59, 0.5); border-left: 4px solid #38bdf8;
+        padding: 20px; border-radius: 8px; margin: 10px 0;
     }
-    .result-val { color: #00f2ff; font-size: 1.4em; font-family: monospace; font-weight: bold; }
-    .unit-tag { color: #a5b4fc; font-size: 0.9em; margin-left: 10px; font-style: italic; }
+    .result-main { font-size: 1.8em; font-weight: bold; color: #38bdf8; font-family: monospace; }
+    .result-sub { font-size: 0.9em; color: #94a3b8; margin-top: 5px; }
     
     /* AI Box */
-    .ai-box {
-        background: #312e81; border: 1px solid #6366f1; padding: 15px; 
-        border-radius: 8px; margin-top: 15px; color: #e0e7ff;
+    .ai-panel {
+        background: #312e81; border: 1px solid #4f46e5; 
+        padding: 15px; border-radius: 8px; margin-top: 15px;
     }
+    
+    /* History Items */
+    .history-btn { text-align: left; padding: 5px; cursor: pointer; }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. EXTENSIVE CONSTANTS LIBRARY (From PDF)
+# 3. CONSTANTS & PRESETS
 # -----------------------------------------------------------------------------
-# Mapping symbols to SymPy Units objects
-C_DICT = {
-    # UNIVERSAL
+CONSTANTS = {
     'c': 299792458 * u.meter / u.second,
     'G': 6.67430e-11 * u.meter**3 / (u.kg * u.second**2),
     'h': 6.62607015e-34 * u.joule * u.second,
     'hbar': 1.054571817e-34 * u.joule * u.second,
-    'ħ': 1.054571817e-34 * u.joule * u.second,
-    
-    # ELECTROMAGNETIC
     'e': 1.602176634e-19 * u.coulomb,
-    'mu0': 1.25663706127e-6 * u.newton / u.ampere**2,
-    'μ0': 1.25663706127e-6 * u.newton / u.ampere**2,
+    'me': 9.1093837139e-31 * u.kg,
+    'mp': 1.67262192595e-27 * u.kg,
+    'NA': 6.02214076e23 / u.mol,
+    'k': 1.380649e-23 * u.joule / u.kelvin,
     'eps0': 8.8541878188e-12 * u.farad / u.meter,
-    'ε0': 8.8541878188e-12 * u.farad / u.meter,
-    'Z0': 376.730313412 * u.ohm,
-    'Kj': 483597.8484e9 * u.hertz / u.volt, # Josephson
-    'Rk': 25812.80745 * u.ohm, # Von Klitzing
-    
-    # ATOMIC & NUCLEAR
-    'me': 9.1093837139e-31 * u.kg, # Electron mass
-    'mp': 1.67262192595e-27 * u.kg, # Proton mass
-    'mn': 1.67492750056e-27 * u.kg, # Neutron mass
-    'm_mu': 1.883531627e-28 * u.kg, # Muon mass
-    'm_tau': 3.16754e-27 * u.kg, # Tau mass
-    'm_d': 3.3435837768e-27 * u.kg, # Deuteron mass
-    'm_alpha': 6.6446573450e-27 * u.kg, # Alpha particle
-    'mu_B': 9.2740100783e-24 * u.joule / u.tesla, # Bohr magneton
-    'mu_N': 5.050783699e-27 * u.joule / u.tesla, # Nuclear magneton
-    'a0': 5.29177210903e-11 * u.meter, # Bohr radius
-    'alpha': 7.2973525643e-3, # Fine structure (dimensionless)
-    'Rinf': 10973731.568157 / u.meter, # Rydberg
-    
-    # PHYSICOCHEMICAL
-    'NA': 6.02214076e23 / u.mol, # Avogadro
-    'k': 1.380649e-23 * u.joule / u.kelvin, # Boltzmann
-    'R': 8.314462618 * u.joule / (u.mol * u.kelvin), # Gas constant
-    'F': 96485.33212 * u.coulomb / u.mol, # Faraday
-    'sigma': 5.670374419e-8 * u.watt / (u.meter**2 * u.kelvin**4), # Stefan-Boltzmann
-    'atm': 101325 * u.pascal,
-    
-    # MATH
-    'pi': sympy.pi, 'π': sympy.pi
+    'mu0': 1.25663706127e-6 * u.newton / u.ampere**2,
+    'pi': sympy.pi, 'π': sympy.pi, 'i': sympy.I
+}
+
+TEMPLATES = {
+    "Select Template...": "",
+    "Kinetic Energy": "0.5 * m * v^2",
+    "Gravitational Force": "G * m1 * m2 / r^2",
+    "Quadratic Root": "solve(a*x^2 + b*x + c, x)",
+    "Derivative (Def)": "diff(f, x)",
+    "Definite Integral": "integrate(f, (x, 0, 10))",
+    "Matrix Mult": "Matrix([[1,2],[3,4]]) * Matrix([[x],[y]])"
 }
 
 # -----------------------------------------------------------------------------
-# 3. CORE LOGIC ENGINE
+# 4. LOGIC ENGINE (NLP + MATH)
 # -----------------------------------------------------------------------------
 
-def insert_text(text):
-    """Updates session state input."""
-    st.session_state.input_value += str(text)
+def parse_natural_language(text):
+    """Translates English to SymPy syntax."""
+    text = text.lower()
+    patterns = [
+        (r"derivative of (.+) with respect to (\w+)", r"diff(\1, \2)"),
+        (r"derivative of (.+)", r"diff(\1, x)"), # assume x
+        (r"integrate (.+) from ([\d\.]+) to ([\d\.]+)", r"integrate(\1, (x, \2, \3))"),
+        (r"integrate (.+)", r"integrate(\1, x)"),
+        (r"solve (.+) for (\w+)", r"solve(\1, \2)"),
+        (r"solve (.+)", r"solve(\1, x)"),
+        (r"(.+) squared", r"(\1)**2"),
+        (r"root of (.+)", r"sqrt(\1)"),
+    ]
+    for p, r in patterns:
+        text = re.sub(p, r, text)
+    return text
 
-def smart_parse(expr_str):
+def smart_solver(expr_str, ans_val):
     """
-    1. Detects if input is Math or Physics.
-    2. Uses SymPy to parse.
-    3. Retains Units if constants are used.
+    1. Pre-process NLP
+    2. Inject 'ans' variable
+    3. Handle Equations
+    4. Parse & Solve
     """
-    if not expr_str: return None, "Empty Input"
+    # 1. NLP Processing
+    expr_str = parse_natural_language(expr_str)
     
-    # Equation handling: LHS = RHS -> LHS - RHS
-    if "=" in expr_str:
+    # 2. Handle 'Ans' (Previous Result)
+    if 'ans' in expr_str.lower() and ans_val is not None:
+        expr_str = expr_str.lower().replace('ans', str(ans_val))
+    
+    # 3. Equation Handling (LHS = RHS -> LHS - RHS)
+    if "=" in expr_str and "solve" not in expr_str:
         parts = expr_str.split("=")
-        expr_str = f"({parts[0]}) - ({parts[1]})"
-    
-    # Standardize input
-    expr_str = expr_str.replace('^', '**')
-    
-    # Create Local Context (All SymPy functions + Physics Constants)
-    local_dict = {
-        'sin': sympy.sin, 'cos': sympy.cos, 'tan': sympy.tan,
-        'exp': sympy.exp, 'log': sympy.log, 'ln': sympy.ln, 'sqrt': sympy.sqrt,
-        'diff': sympy.diff, 'integrate': sympy.integrate, 'limit': sympy.limit,
-        'solve': sympy.solve
-    }
-    
-    # Add Symbols (x, y, t) and Constants
-    x, y, z, t, m = sympy.symbols('x y z t m')
-    local_dict.update({'x': x, 'y': y, 'z': z, 't': t, 'm': m})
-    local_dict.update(C_DICT)
-    
-    try:
-        # Attempt Parse
-        expr = sympy.sympify(expr_str, locals=local_dict)
-        return expr, None
-    except Exception as e:
-        return None, f"Syntax Error: {str(e)}"
+        expr_str = f"solve(({parts[0]}) - ({parts[1]}), x)"
 
-def format_units_ai(api_key, val_str, unit_str):
-    """
-    Uses Groq to convert messy units (kg*m^2/s^2) into clean ones (Joules).
-    """
-    if not api_key: return "⚠️ Connect AI for smart unit cleanup."
+    # Standardize
+    expr_str = expr_str.replace('^', '**')
+
+    # 4. Context Setup
+    local_dict = CONSTANTS.copy()
+    # Add common functions
+    local_dict.update({
+        'sin': sympy.sin, 'cos': sympy.cos, 'tan': sympy.tan,
+        'exp': sympy.exp, 'log': sympy.log, 'ln': sympy.ln, 
+        'sqrt': sympy.sqrt, 'diff': sympy.diff, 'integrate': sympy.integrate,
+        'solve': sympy.solve, 'limit': sympy.limit, 'Matrix': sympy.Matrix
+    })
+    # Add symbols
+    vars_ = sympy.symbols('x y z t a b c m v r m1 m2 f')
+    local_dict.update({k.name: k for k in vars_})
+
+    try:
+        res = sympy.sympify(expr_str, locals=local_dict)
+        return res, expr_str, None
+    except Exception as e:
+        return None, expr_str, str(e)
+
+def get_ai_explanation(api_key, expr, res, history_ctx):
+    """Rich context AI explanation."""
+    if not api_key: return "⚠️ Please add API Key for AI insights."
     
     prompt = f"""
-    You are a physics assistant. 
-    Value: {val_str}
-    Current Unit: {unit_str}
+    Role: Expert Math/Physics Tutor.
+    Current Input: {expr}
+    Computed Result: {res}
+    Session History: {history_ctx[-3:]}
     
-    Task: Identify the physical quantity (Energy, Force, etc.) and convert the unit to its standard SI name (e.g. Joules, Newtons, Volts).
-    If it's already simple, just repeat it.
-    
-    Output format: "Value Unit (Physical Quantity)"
-    Example: "5.2e-19 Joules (Energy)" or "9.8 m/s^2 (Acceleration)"
-    KEEP IT SHORT.
+    Task:
+    1. Explain what this calculation represents (Physics/Math concept).
+    2. Break down the result (units, significance).
+    3. Suggest a relevant "Next Step" calculation.
+    4. Keep it concise (bullet points).
     """
     
     try:
@@ -174,142 +181,149 @@ def format_units_ai(api_key, val_str, unit_str):
         payload = {
             "model": "llama3-70b-8192",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
+            "temperature": 0.3
         }
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
-        return resp.json()['choices'][0]['message']['content']
-    except:
-        return "AI Unit Check Failed"
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        return r.json()['choices'][0]['message']['content']
+    except Exception as e:
+        return f"AI Error: {e}"
 
 # -----------------------------------------------------------------------------
-# 4. UI LAYOUT
+# 5. UI LAYOUT
 # -----------------------------------------------------------------------------
 
-# --- Sidebar: Settings & Reference ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚙️ Engine Room")
+    st.header("⚙️ Settings")
     
-    # API Key Handler
-    if "GROQ_API_KEY" in st.secrets:
-        api_key = st.secrets["GROQ_API_KEY"]
-        st.success("✅ AI Connected (Secrets)")
+    # API Key Logic
+    api_key = st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        api_key = st.text_input("Groq API Key", type="password")
     else:
-        api_key = st.text_input("Groq API Key", type="password", help="Required for Smart Unit Formatting")
+        st.success("✅ AI Connected")
 
-    with st.expander("📖 User Manual (How-To)"):
-        st.markdown("""
-        **1. Physics Calculations (with Units!)**
-        * `E = m * c^2` (Mass-Energy)
-        * `G * mp * me / r^2` (Gravity)
-        * `h * c / (500 * nm)` (Photon Energy)
-        
-        **2. Symbolic Math**
-        * `diff(sin(x)*x, x)` (Derivative)
-        * `integrate(exp(-x), x)` (Integral)
-        * `solve(x^2 - 4, x)` (Roots)
-        
-        **3. Plotting**
-        * Just type an expression with `x` (e.g. `sin(x) * x`) and calculate.
-        """)
-
-    with st.expander("📚 Constants Library"):
-        st.write("Contains all CODATA 2022 constants (Universal, Atomic, Nuclear, etc.)")
-        st.json({k: str(v) for k, v in list(C_DICT.items())[:10]}) # Show preview
-
-# --- Main Interface ---
-st.title("⚛️ Scientific Super Calculator v2.0")
-
-# VIRTUAL MATH KEYBOARD
-with st.expander("⌨️  Virtual Math & Physics Keyboard", expanded=False):
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    if k1.button("∫ (Int)", use_container_width=True): insert_text("integrate(")
-    if k2.button("d/dx", use_container_width=True): insert_text("diff(")
-    if k3.button("√ (Sqrt)", use_container_width=True): insert_text("sqrt(")
-    if k4.button("sin", use_container_width=True): insert_text("sin(")
-    if k5.button("cos", use_container_width=True): insert_text("cos(")
-    if k6.button("log", use_container_width=True): insert_text("log(")
+    # Features
+    auto_explain = st.toggle("🤖 Auto-Explain", value=True, help="Get AI insights automatically")
     
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    if c1.button("π", use_container_width=True): insert_text("π")
-    if c2.button("c", use_container_width=True): insert_text("c")
-    if c3.button("G", use_container_width=True): insert_text("G")
-    if c4.button("ℏ", use_container_width=True): insert_text("hbar")
-    if c5.button("ε0", use_container_width=True): insert_text("eps0")
-    if c6.button("me", use_container_width=True): insert_text("me")
-
-# INPUT AREA
-query = st.text_input("Enter Equation or Expression:", key="input_value", placeholder="e.g. h * c / (500e-9 * m) OR diff(x^2, x)")
-
-# ACTIONS
-col_act1, col_act2 = st.columns([1, 3])
-calc_btn = col_act1.button("🚀 Calculate", use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# 5. EXECUTION LOGIC
-# -----------------------------------------------------------------------------
-if calc_btn and query:
-    # Parse
-    expr_obj, err = smart_parse(query)
+    st.divider()
     
-    if err:
-        st.error(err)
-    else:
-        # Separate Units from Value (if physics)
-        try:
-            # Check if expression has units
-            # SymPy logic: simplify() often combines units
-            evaluated = sympy.simplify(expr_obj)
+    # Template Loader
+    st.subheader("📑 Smart Templates")
+    selected_template = st.selectbox("Load Formula:", list(TEMPLATES.keys()))
+    if selected_template and selected_template != "Select Template...":
+        st.session_state.input_value = TEMPLATES[selected_template]
+
+    # History Panel
+    st.divider()
+    st.subheader("📜 History (Click to Load)")
+    for i, item in enumerate(reversed(st.session_state.history[-10:])):
+        # Truncate for display
+        lbl = f"{item['expr'][:20]}... = {str(item['res'])[:10]}..."
+        if st.button(lbl, key=f"hist_{i}"):
+            st.session_state.input_value = item['expr']
+            st.rerun()
+
+# --- MAIN PAGE ---
+st.title("🧠 Scientific Super Calculator v3.0")
+
+# Tabs for Organization
+tab_calc, tab_ref = st.tabs(["🧮 Calculator", "📚 Reference"])
+
+with tab_calc:
+    # INPUT SECTION
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        # The main input box
+        query = st.text_input("Enter Math, Physics, or Natural Language:", 
+                             key="input_value", 
+                             placeholder="e.g. 'derivative of sin(x)' or 'G * me * mp / r^2'")
+    with c2:
+        # Calculate Button
+        st.write("") # spacer
+        st.write("") 
+        calc_btn = st.button("🚀 Solve", use_container_width=True)
+
+    # PROCESS LOGIC
+    if query and (calc_btn or query != ""): # Reacts to enter key if logic permits
+        if calc_btn: # Explicit trigger
             
-            # Numeric Evaluation
-            numeric_val = evaluated.evalf()
+            # 1. SOLVE
+            result_obj, final_expr, err = smart_solver(query, st.session_state.ans)
             
-            # Save to history
-            st.session_state.history.append(f"{query}")
-            
-            # DISPLAY RESULTS
-            st.markdown(f"""
-            <div class="result-card">
-                <div style="color:#94a3b8; font-size:12px;">RAW SYMPY OUTPUT</div>
-                <div class="result-val">{str(numeric_val).replace('**', '^')}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            if err:
+                st.error(f"❌ Syntax Error: {err}")
+                st.caption(f"Parsed as: `{final_expr}`")
+            else:
+                # 2. PROCESS RESULT
+                try:
+                    # Simplify & Eval
+                    simplified = sympy.simplify(result_obj)
+                    numeric = simplified.evalf()
+                    
+                    # Update State
+                    st.session_state.ans = numeric
+                    st.session_state.last_result_obj = simplified
+                    
+                    # Add to History
+                    st.session_state.history.append({'expr': query, 'res': str(simplified)})
+                    
+                    # 3. DISPLAY
+                    st.markdown(f"""
+                    <div class="result-box">
+                        <div class="result-sub">INPUT: {final_expr}</div>
+                        <div class="result-main">{str(simplified).replace('**', '^')}</div>
+                        <div class="result-sub">≈ {float(numeric):.6e} (Numeric)</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 4. PLOTTING (Automatic)
+                    if hasattr(simplified, 'free_symbols') and len(simplified.free_symbols) == 1:
+                        var = list(simplified.free_symbols)[0]
+                        # Only plot if it's a function of 1 variable (math mode)
+                        try:
+                            f = sympy.lambdify(var, simplified, modules=['numpy'])
+                            x = np.linspace(-10, 10, 400)
+                            y = f(x)
+                            # Clean mess
+                            y = np.where(np.abs(y) > 1e10, np.nan, y)
+                            
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(x=x, y=y, line=dict(color='#38bdf8', width=3)))
+                            fig.update_layout(
+                                title=f"Graph of {str(simplified)}", 
+                                template="plotly_dark", height=300,
+                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(15, 23, 42, 0.5)'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except: pass
 
-            # AI UNIT CLEANUP (The "Desmos Fixer")
-            # If the result looks like physics (contains units or is huge/tiny), trigger AI
-            str_res = str(numeric_val)
-            if "meter" in str_res or "kg" in str_res or "joule" in str_res or "second" in str_res:
-                st.info("🤖 Analyzing Units with AI...")
-                clean_units = format_units_ai(api_key, str(numeric_val), "SI Base Units")
-                st.markdown(f"""
-                <div class="ai-box">
-                    <strong>✨ AI Smart Format:</strong><br>
-                    <span style="font-size: 1.3em; color: #a5b4fc;">{clean_units}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                    # 5. AI EXPLAINER (Auto or Manual)
+                    if auto_explain:
+                        with st.spinner("🤖 AI is analyzing context..."):
+                            explanation = get_ai_explanation(api_key, query, str(simplified), st.session_state.history)
+                            st.markdown(f"""
+                            <div class="ai-panel">
+                                <strong>💡 AI Insight</strong>
+                                <div style="margin-top:10px; font-size: 0.95em;">{explanation}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                except Exception as e:
+                    st.error(f"Calculation Error: {e}")
 
-            # GRAPHING (If pure math 'x')
-            if hasattr(evaluated, 'free_symbols') and len(evaluated.free_symbols) == 1:
-                var = list(evaluated.free_symbols)[0]
-                if var.name == 'x': # Only plot if 'x' is the variable to avoid confusion
-                    try:
-                        f_lam = sympy.lambdify(var, evaluated, modules=['numpy'])
-                        x_vals = np.linspace(-10, 10, 500)
-                        y_vals = f_lam(x_vals)
-                        # Mask errors
-                        y_vals = np.where(np.abs(y_vals) > 1e10, np.nan, y_vals) 
-                        
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=x_vals, y=y_vals, line=dict(color='#00f2ff')))
-                        fig.update_layout(title=f"Graph: {query}", template="plotly_dark", height=300)
-                        st.plotly_chart(fig, use_container_width=True)
-                    except: pass
+with tab_ref:
+    st.markdown("### 📘 Constants & Cheat Sheet")
+    st.json({k: str(v) for k, v in list(CONSTANTS.items())[:15]})
+    st.markdown("""
+    **Shortcuts:**
+    * `ans` : Use previous result
+    * `diff(y, x)` : Derivative
+    * `integrate(y, x)` : Integral
+    * `solve(eq, x)` : Algebra
+    * `Matrix([[a,b],[c,d]])` : Linear Algebra
+    """)
 
-        except Exception as e:
-            st.error(f"Calculation Error: {e}")
-
-# History Footer
-if st.session_state.history:
-    st.markdown("---")
-    st.caption("Recent Calculations:")
-    for h in st.session_state.history[-3:]:
-        st.text(h)
+# Footer
+st.markdown("---")
+st.caption(f"v3.0 | 💾 Memory: {len(st.session_state.history)} items | 🔌 AI: {'Connected' if api_key else 'Offline'}")
